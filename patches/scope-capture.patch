@@ -1,0 +1,116 @@
+--- a/src/synth.h
++++ b/src/synth.h
+@@ -27,4 +27,10 @@
+     extern void synthSetLyrics(void *pthis, const char **ptr);
+ #endif
+ 
++    // Per-channel scope capture for audio visualization
++    extern void synthEnableScopeCapture(void *pthis, int enable);
++    extern unsigned int synthGetScopeData(void *pthis, int channel,
++                                          float *buffer, unsigned int num_samples);
++    extern int synthGetNumChannels(void);
++
+ }
+--- a/src/synth_core.cpp
++++ b/src/synth_core.cpp
+@@ -2656,6 +2656,13 @@
+ 
+     bool initialized;
+ 
++    // Scope capture ring buffers for per-channel audio visualization
++    static const int SCOPE_BUFFER_SIZE = 1024;
++    static const int SCOPE_BUFFER_MASK = SCOPE_BUFFER_SIZE - 1;
++    float scope_buffer[CHANS][SCOPE_BUFFER_SIZE];
++    uint32_t scope_write_pos[CHANS];
++    int scope_enabled;
++
+     // delay buffers
+     float maindelbuf[2][32768];
+     float chandelbuf[CHANS][2][2048];
+@@ -3219,6 +3226,21 @@
+                 ronanCBProcess(&ronan, &instance.chanbuf[0].l, nsamples);
+ 
+             chansw[chan].process(nsamples);
++
++            // Capture per-channel scope data after channel processing
++            if (scope_enabled)
++            {
++                StereoSample *src = instance.chanbuf;
++                uint32_t wpos = scope_write_pos[chan];
++                for (int i = 0; i < nsamples; i++)
++                {
++                    // Mix stereo to mono for scope display
++                    float mono = (src[i].l + src[i].r) * 0.5f;
++                    scope_buffer[chan][wpos & SCOPE_BUFFER_MASK] = mono;
++                    wpos++;
++                }
++                scope_write_pos[chan] = wpos;
++            }
+         }
+ 
+         // global filters
+@@ -3311,6 +3333,52 @@
+     return ((V2Synth *)pthis)->instance.SRcFrameSize;
+ }
+ 
++void synthEnableScopeCapture(void *pthis, int enable)
++{
++    V2Synth *synth = (V2Synth *)pthis;
++    if (!synth || !synth->initialized)
++        return;
++
++    synth->scope_enabled = enable;
++
++    if (enable)
++    {
++        memset(synth->scope_buffer, 0, sizeof(synth->scope_buffer));
++        memset(synth->scope_write_pos, 0, sizeof(synth->scope_write_pos));
++    }
++}
++
++unsigned int synthGetScopeData(void *pthis, int channel,
++                               float *buffer, unsigned int num_samples)
++{
++    V2Synth *synth = (V2Synth *)pthis;
++    if (!synth || !synth->initialized || !buffer || !synth->scope_enabled)
++        return 0;
++
++    if (channel < 0 || channel >= V2Synth::CHANS)
++        return 0;
++
++    unsigned int buf_size = V2Synth::SCOPE_BUFFER_SIZE;
++    if (num_samples > buf_size)
++        num_samples = buf_size;
++
++    uint32_t write_pos = synth->scope_write_pos[channel];
++    uint32_t read_pos = (write_pos - num_samples) & V2Synth::SCOPE_BUFFER_MASK;
++
++    for (unsigned int i = 0; i < num_samples; i++)
++    {
++        buffer[i] = synth->scope_buffer[channel][read_pos];
++        read_pos = (read_pos + 1) & V2Synth::SCOPE_BUFFER_MASK;
++    }
++
++    return num_samples;
++}
++
++int synthGetNumChannels(void)
++{
++    return V2Synth::CHANS;
++}
++
+ extern "C" void *synthGetSpeechMem(void *pthis)
+ {
+     return &((V2Synth *)pthis)->ronan;
+--- a/src/v2mplayer.h
++++ b/src/v2mplayer.h
+@@ -84,6 +84,9 @@
+     // returns if song is currently playing
+     bool IsPlaying();
+ 
++    // Returns pointer to internal synth instance for scope capture
++    void *GetSynth() { return m_synth; }
++
+     #ifdef V2MPLAYER_SYNC_FUNCTIONS
+     // Retrieves an array of timer<->song position
+     //

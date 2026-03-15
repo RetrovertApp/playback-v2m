@@ -1,0 +1,12 @@
+This plugin's integration code (v2m_plugin.cpp and CMakeLists.txt) is
+licensed under the MIT License. See the top-level LICENSE file.
+
+Third-party dependencies:
+=========================
+
+v2m-player
+License: Artistic-2.0
+Source: https://github.com/jgilje/v2m-player
+
+The full Artistic License 2.0 text is included in the LICENSE file in
+this directory.
