@@ -307,41 +307,66 @@ static void v2m_event(void* user_data, uint8_t* event_data, uint64_t len) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static uint32_t v2m_get_scope_data(void* user_data, int channel, float* buffer, uint32_t num_samples) {
-    V2MReplayerData* data = (V2MReplayerData*)user_data;
-    if (!data || !data->player || !data->playing || !buffer) {
-        return 0;
+static bool v2m_get_structure(void* user_data, RVVizInfo* out) {
+    (void)user_data;
+    if (out == nullptr) {
+        return false;
     }
-
-    void* synth = data->player->GetSynth();
-    if (!synth) {
-        return 0;
-    }
-
-    if (!data->scope_enabled) {
-        synthEnableScopeCapture(synth, 1);
-        data->scope_enabled = true;
-    }
-
-    return synthGetScopeData(synth, channel, buffer, num_samples);
+    int total = synthGetNumChannels();
+    out->caps = RVVizCaps_Scope;
+    out->scroll_mode = RVScrollMode_Synchronized;
+    out->pattern_channel_count = 0;
+    out->scope_channel_count = total > 0 ? (uint32_t)total : 0;
+    out->column_count = 0;
+    return true;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static uint32_t v2m_get_scope_channel_names(void* user_data, const char** names, uint32_t max_channels) {
+static uint32_t v2m_get_scope_channels(void* user_data, RVChannelDesc* out, uint32_t cap) {
     (void)user_data;
-    static char s_name_bufs[64][16];
+    if (out == nullptr) {
+        return 0;
+    }
     int total = synthGetNumChannels();
     uint32_t count = total > 0 ? (uint32_t)total : 0;
-    if (count > 64)
-        count = 64;
-    if (count > max_channels)
-        count = max_channels;
+    if (count > cap)
+        count = cap;
     for (uint32_t i = 0; i < count; i++) {
-        snprintf(s_name_bufs[i], sizeof(s_name_bufs[i]), "Synth %u", i + 1);
-        names[i] = s_name_bufs[i];
+        memset(out[i].name, 0, sizeof(out[i].name));
+        snprintf((char*)out[i].name, sizeof(out[i].name), "Synth %u", i + 1);
+        out[i].scope_width = 0;
     }
     return count;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void v2m_set_scope_enabled(void* user_data, bool on) {
+    V2MReplayerData* data = (V2MReplayerData*)user_data;
+    if (!data || !data->player) {
+        return;
+    }
+    void* synth = data->player->GetSynth();
+    if (!synth) {
+        return;
+    }
+    synthEnableScopeCapture(synth, on ? 1 : 0);
+    data->scope_enabled = on;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static uint32_t v2m_get_scope_samples(void* user_data, int32_t channel, float* out, uint32_t cap) {
+    V2MReplayerData* data = (V2MReplayerData*)user_data;
+    if (!data || !data->player || !data->playing || !out || !data->scope_enabled) {
+        return 0;
+    }
+    void* synth = data->player->GetSynth();
+    if (!synth) {
+        return 0;
+    }
+    return synthGetScopeData(synth, channel, out, cap);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -363,12 +388,19 @@ static RVPlaybackPlugin g_v2m_plugin = {
     v2m_metadata,
     v2m_static_init,
     nullptr, // settings_updated
-    nullptr, // get_tracker_info
-    nullptr, // get_pattern_cell
-    nullptr, // get_pattern_num_rows
-    v2m_get_scope_data,
     nullptr, // static_destroy
-    v2m_get_scope_channel_names,
+
+    // Visualization: scope-only (per-synth-channel mono scope, no pattern grid).
+    v2m_get_structure,
+    nullptr, // get_columns
+    nullptr, // get_pattern_channels
+    v2m_get_scope_channels,
+    nullptr, // get_position
+    nullptr, // get_channel_rows
+    nullptr, // get_cells
+    v2m_set_scope_enabled,
+    v2m_get_scope_samples,
+    nullptr, // get_vu
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
