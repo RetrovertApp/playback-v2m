@@ -1,12 +1,13 @@
-This plugin's integration code (v2m_plugin.cpp and CMakeLists.txt) is
-licensed under the MIT License. See the top-level LICENSE file.
+This plugin's integration code (v2m_plugin.cpp, v2m_pattern.h,
+test_pattern.cpp and CMakeLists.txt) is licensed under the MIT License.
+See the top-level LICENSE file.
 
 Third-party dependencies:
 =========================
 
-v2m-player
-License: Artistic-2.0
-Source: https://github.com/jgilje/v2m-player
+v2redux
+License: CC0-1.0 (public domain dedication)
+Source: https://github.com/spheenik/v2redux
 
-The full Artistic License 2.0 text is included in the LICENSE file in
-this directory.
+Derives from the V2 synthesizer by Tammo "kb" Hinrichs, placed in the
+public domain by its author. See the LICENSE file in this directory.

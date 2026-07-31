@@ -1,0 +1,141 @@
+diff --git a/src/v2core.cpp b/src/v2core.cpp
+index ca21380..c7296b8 100644
+--- a/src/v2core.cpp
++++ b/src/v2core.cpp
+@@ -692,6 +692,13 @@ struct V2Instance
+   // from chan[]/written to this side buffer -- never alters the rendered bits.
+   sF32 chanPeak[16];   // 16 == V2Synth::CHANS (not in scope here)
+ 
++  // per-channel scope ring buffers (display-only, same contract as chanPeak):
++  // the last SCOPE_SIZE mono samples of each channel's post-FX signal.
++  enum { SCOPE_SIZE = 2048, SCOPE_MASK = SCOPE_SIZE - 1 };
++  sF32 scopeBuf[16][SCOPE_SIZE];
++  sU32 scopePos[16];
++  sU32 scopeOn;
++
+   // buffers
+   sF32 vcebuf[MAX_FRAME_SIZE];
+   sF32 vcebuf2[MAX_FRAME_SIZE];
+@@ -3399,6 +3406,14 @@ struct V2Chan
+       }
+       pk *= chgain;
+       if (pk > inst->chanPeak[chanIndex]) inst->chanPeak[chanIndex] = pk;
++
++      if (inst->scopeOn)
++      {
++        sU32 w = inst->scopePos[chanIndex];
++        for (sInt i = 0; i < nsamples; i++, w++)
++          inst->scopeBuf[chanIndex][w & V2Instance::SCOPE_MASK] = (chan[i].l + chan[i].r) * 0.5f;
++        inst->scopePos[chanIndex] = w;
++      }
+     }
+ 
+     // Muted channels render fully (above) but feed NO output bus -- not the main
+@@ -4604,6 +4619,32 @@ void __stdcall synthGetChannelPeaks(void *pthis, float *dest16)
+   for (int i = 0; i < 16; i++) { dest16[i] = s->instance.chanPeak[i]; s->instance.chanPeak[i] = 0.0f; }
+ }
+ 
++void __stdcall synthEnableScopeCapture(void *pthis, int enable)
++{
++  V2Synth *s = (V2Synth *)pthis;
++  if (!s->initialized) return;
++  s->instance.scopeOn = enable ? 1 : 0;
++  if (enable)
++  {
++    memset(s->instance.scopeBuf, 0, sizeof(s->instance.scopeBuf));
++    memset(s->instance.scopePos, 0, sizeof(s->instance.scopePos));
++  }
++}
++
++unsigned int __stdcall synthGetScopeData(void *pthis, int channel,
++                                         float *buffer, unsigned int numSamples)
++{
++  V2Synth *s = (V2Synth *)pthis;
++  if (!s->initialized || !s->instance.scopeOn || !buffer) return 0;
++  if (channel < 0 || channel >= V2Synth::CHANS) return 0;
++  if (numSamples > (unsigned int)V2Instance::SCOPE_SIZE)
++    numSamples = (unsigned int)V2Instance::SCOPE_SIZE;
++  sU32 w = s->instance.scopePos[channel];
++  for (unsigned int i = 0; i < numSamples; i++)
++    buffer[i] = s->instance.scopeBuf[channel][(w - numSamples + i) & V2Instance::SCOPE_MASK];
++  return numSamples;
++}
++
+ void __stdcall synthGetPgm(void *pthis, void *dest)
+ {
+   ((V2Synth *)pthis)->getPgm((sInt*)dest);
+diff --git a/src/v2core.h b/src/v2core.h
+index 621aec1..fdd5f90 100644
+--- a/src/v2core.h
++++ b/src/v2core.h
+@@ -86,6 +86,14 @@ extern "C"
+   long __stdcall synthGetFrameSize(void *pthis);
+   void *__stdcall synthGetSpeechMem(void *pthis);
+   void __stdcall synthSetLyrics(void *pthis, const char **ptr); // no-op without RONAN
++
++  // per-channel scope capture (display-only; off by default so it costs
++  // nothing when no visualizer is attached). Writes a mono ring buffer per
++  // channel from the same post-FX tap the peak meter reads -- never alters
++  // the rendered bits.
++  void __stdcall synthEnableScopeCapture(void *pthis, int enable);
++  unsigned int __stdcall synthGetScopeData(void *pthis, int channel,
++                                           float *buffer, unsigned int numSamples);
+ }
+ 
+ #endif // V2CORE_H_
+diff --git a/src/v2player.cpp b/src/v2player.cpp
+index fbe6fe1..afa73fa 100644
+--- a/src/v2player.cpp
++++ b/src/v2player.cpp
+@@ -174,4 +174,17 @@ void Player::getChannelLevels(float *dest16)
+   impl_->seq.GetChannelPeaks((sF32 *)dest16);
+ }
+ 
++void Player::setScopeEnabled(bool on)
++{
++  if (impl_->opened)
++    impl_->seq.EnableScope(on ? sTRUE : sFALSE);
++}
++
++uint32_t Player::getScopeSamples(int channel, float *out, uint32_t cap)
++{
++  if (!impl_->opened)
++    return 0;
++  return (uint32_t)impl_->seq.GetScope((sInt)channel, (sF32 *)out, (sU32)cap);
++}
++
+ } // namespace v2redux
+diff --git a/src/v2redux.h b/src/v2redux.h
+index 0021931..8d59bdb 100644
+--- a/src/v2redux.h
++++ b/src/v2redux.h
+@@ -130,6 +130,13 @@ public:
+   // the mix, independent of its mute state. Display-only.
+   void getChannelLevels(float *dest16);
+ 
++  // Per-channel oscilloscope capture (display-only, off by default -- it costs
++  // nothing until enabled). play() resets the synth and turns capture off, so
++  // re-enable after every play(). getScopeSamples() copies the most recent
++  // `cap` mono samples of channel `channel` (0..15) and returns the count.
++  void setScopeEnabled(bool on);
++  uint32_t getScopeSamples(int channel, float *out, uint32_t cap);
++
+ private:
+   PlayerImpl *impl_;
+   int detectedVersion_;
+diff --git a/src/v2seq.h b/src/v2seq.h
+index 38e8e3e..464562f 100644
+--- a/src/v2seq.h
++++ b/src/v2seq.h
+@@ -111,6 +111,11 @@ public:
+   // clears the meter. Display-only.
+   void GetChannelPeaks(sF32 *a_dest);
+ 
++  // per-channel scope capture (display-only). Off after every Reset() (synthInit
++  // zeroes the instance), so re-enable after Play().
++  void EnableScope(sBool a_on) { synthEnableScopeCapture(m_synth, a_on); }
++  sU32 GetScope(sInt a_ch, sF32 *a_dest, sU32 a_num) { return synthGetScopeData(m_synth, a_ch, a_dest, a_num); }
++
+   // Song length in SAMPLES at the current samplerate, computed by running the
+   // sequencer's tick/tempo loop ONLY (no DSP) to the point Render() stops --
+   // i.e. where IsPlaying() goes false. Fast (cost ~= event count, not duration).
