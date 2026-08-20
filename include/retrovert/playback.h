@@ -95,13 +95,14 @@ typedef struct RVReadInfo {
     RVReadStatus status;
 } RVReadInfo;
 
-// Destination buffer and resulting info for a `read_data` call.
+// Destination buffer and input request for a `read_data` call.
 typedef struct RVReadData {
     // Caller-owned output buffer the plugin writes interleaved frames into.
     void* channels_output;
     // Capacity of `channels_output` in bytes.
     uint32_t channels_output_max_bytes_size;
-    // Filled in by the plugin to describe what it produced.
+    // Caller-supplied format hint and maximum requested frame count; status is ignored.
+    // The plugin returns a separate `ReadInfo` describing what it produced.
     RVReadInfo info;
 } RVReadData;
 

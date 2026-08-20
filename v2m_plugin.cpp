@@ -172,7 +172,8 @@ static RVReadInfo v2m_read_data(void* user_data, RVReadData dest) {
         return (RVReadInfo) { format, 0, RVReadStatus_Finished };
     }
 
-    uint32_t max_frames = dest.channels_output_max_bytes_size / (sizeof(float) * V2M_CHANNELS);
+    uint32_t capacity_frames = dest.channels_output_max_bytes_size / (sizeof(float) * V2M_CHANNELS);
+    uint32_t max_frames = dest.info.frame_count < capacity_frames ? dest.info.frame_count : capacity_frames;
     data->player.render((float*)dest.channels_output, max_frames);
     data->frames_played += max_frames;
 

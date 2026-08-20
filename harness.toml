@@ -1,0 +1,9 @@
+[plugin]
+name = "v2m"
+
+[data]
+entries = []
+
+[[fixtures]]
+file = "fixtures/0test.v2m"
+sha256 = "cb4e0d1a62164be5574bc82bf019b4f7a03eedf550ce75ee44ad786e9ec7dbe6"

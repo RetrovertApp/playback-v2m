@@ -17,12 +17,17 @@ extern "C" {
 #define RVS_STRING_RANGE_TYPE 0x1004
 #define RV_SETTINGS_API_VERSION 1
 
+// Registration limits enforced before the host reads plugin-owned arrays.
+#define RV_SETTINGS_COUNT_LIMIT 1024
+#define RVS_CHOICE_COUNT_LIMIT 1024
+
 typedef enum RVSettingsResult {
     RVSettingsResult_Ok = 0,
     RVSettingsResult_NotFound = 1,
     RVSettingsResult_UnknownId = 2,
     RVSettingsResult_DuplicatedId = 3,
     RVSettingsResult_WrongType = 4,
+    RVSettingsResult_InvalidCount = 5,
 } RVSettingsResult;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
