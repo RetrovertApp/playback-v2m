@@ -62,7 +62,7 @@ add_library(v2m_playback SHARED
 target_link_libraries(v2m_playback PRIVATE v2redux_static)
 
 if(NOT WIN32)
-    target_link_libraries(v2m_playback PRIVATE stdc++ m)
+    target_link_libraries(v2m_playback PRIVATE m)
 endif()
 
 target_compile_options(v2m_playback PRIVATE
