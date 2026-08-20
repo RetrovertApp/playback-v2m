@@ -34,6 +34,12 @@ target_include_directories(v2redux_static PUBLIC
     ${v2redux_SOURCE_DIR}/src
 )
 
+# v2core.cpp never includes v2redux.h, so the V2_RONAN=1 default from that
+# header does not reach it: it compiles the no-op speech stubs, which
+# collide with ronan.cpp's real definitions under lld-link and silently
+# disable speech under ELF archive resolution. Define it for every TU.
+target_compile_definitions(v2redux_static PRIVATE V2_RONAN=1)
+
 # v2redux's determinism contract: no FMA contraction, no fast-math, SSE2 rather
 # than x87. Without these the engine still plays, but not bit-identically.
 if(MSVC)
