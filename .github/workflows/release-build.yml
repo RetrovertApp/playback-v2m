@@ -13,4 +13,4 @@ permissions:
 
 jobs:
   build:
-    uses: RetrovertApp/retrovert-build-harness/.github/workflows/build-plugin.yml@v5
+    uses: RetrovertApp/retrovert-build-harness/.github/workflows/build-plugin.yml@v9
