@@ -198,4 +198,12 @@ function(suppress_external_warnings target)
     else()
         target_compile_options(${target} PRIVATE -w)
     endif()
+    # Silencing every warning also silences the harness's -Werror=date-time, so
+    # vendored code can embed its own build time and two builds of one revision
+    # stop matching. Pin the macros rather than rely on a gate that is switched
+    # off here by design; -w and /w already cover the redefinition warning.
+    target_compile_definitions(${target} PRIVATE
+        "__DATE__=\"Jan  1 1970\""
+        "__TIME__=\"00:00:00\""
+        "__TIMESTAMP__=\"Thu Jan  1 00:00:00 1970\"")
 endfunction()
