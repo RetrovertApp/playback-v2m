@@ -19,6 +19,7 @@ download_library(
     EXTRACT_DIR "v2redux-5d3157b7c312fbfe2f82430dd3e819594cf3205b"
     PATCHES
         patches/v2redux-scope-capture.patch
+        patches/v2redux-pitchbend-stride.patch
 )
 
 # Build v2redux as a static library

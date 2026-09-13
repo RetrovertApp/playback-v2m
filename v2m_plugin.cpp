@@ -38,6 +38,10 @@ extern "C" {
 #define V2M_SAMPLE_RATE 44100
 #define V2M_CHANNELS 2
 #define V2M_COLUMN_COUNT 3
+// A v2m song is one timed row sequence, thousands of rows long, and the host
+// caps the rows a snapshot may carry (64 by default). The window follows the
+// playhead within that cap; see cpsycle for the same shape.
+#define V2M_ROW_WINDOW 64
 
 RV_PLUGIN_USE_IO_API();
 RV_PLUGIN_USE_METADATA_API();
@@ -317,12 +321,25 @@ static bool v2m_get_position(void* user_data, RVTrackerPosition* out) {
         }
     }
 
+    // The sequence is longer than the host's row budget, so the window follows
+    // the playhead instead of spanning the whole song.
+    const uint32_t rows = data->pattern.rows;
+    uint32_t win_lo = 0;
+    uint32_t win_hi = rows;
+    if (rows > V2M_ROW_WINDOW) {
+        win_lo = lo > (V2M_ROW_WINDOW / 2) ? lo - (V2M_ROW_WINDOW / 2) : 0;
+        if (win_lo + V2M_ROW_WINDOW > rows) {
+            win_lo = rows - V2M_ROW_WINDOW;
+        }
+        win_hi = win_lo + V2M_ROW_WINDOW;
+    }
+
     // v2m has no order list or patterns; report bars (32 rows) in their place.
     out->order = lo / 32;
     out->pattern = lo / 32;
     out->row = lo;
-    out->window_lo = 0;
-    out->window_hi = data->pattern.rows;
+    out->window_lo = win_lo;
+    out->window_hi = win_hi;
     return true;
 }
 

@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace v2mpat {
@@ -109,6 +110,8 @@ inline bool extract(const uint8_t* data, size_t size, uint32_t samplerate, Patte
 
     Stream notes[CHANNELS];
     Stream pgms[CHANNELS];
+    Stream bends[CHANNELS];
+    Stream ctls[CHANNELS][7];
     for (int ch = 0; ch < CHANNELS && c.ok; ch++) {
         uint32_t notenum = c.u32();
         if (!notenum) {
@@ -120,12 +123,12 @@ inline bool extract(const uint8_t* data, size_t size, uint32_t samplerate, Patte
         pgms[ch].count = c.u32();
         pgms[ch].ptr = c.take(pgms[ch].count, 4);
 
-        uint32_t pbnum = c.u32();
-        c.take(pbnum, 5);
+        bends[ch].count = c.u32();
+        bends[ch].ptr = c.take(bends[ch].count, 5);
 
         for (int cc = 0; cc < 7; cc++) {
-            uint32_t ccnum = c.u32();
-            c.take(ccnum, 4);
+            ctls[ch][cc].count = c.u32();
+            ctls[ch][cc].ptr = c.take(ctls[ch][cc].count, 4);
         }
     }
     if (!c.ok) {
@@ -153,9 +156,15 @@ inline bool extract(const uint8_t* data, size_t size, uint32_t samplerate, Patte
             vel = (uint8_t)(vel + s.ptr[4 * s.count + i]);
             uint64_t row = (uint64_t)time * 8 / timediv;
             if (row < rows) {
+                // A row holds one cell per channel, so events that share a row
+                // overwrite each other. A note that struck is what the row
+                // sounds like; a note-off must not hide it (legato writes the
+                // off and the on at the same tick, in either order).
                 Cell& cell = out->cells[row * CHANNELS + ch];
-                cell.note = (uint8_t)(note + 1);
-                cell.vel = vel;
+                if (vel != 0 || cell.vel == 0) {
+                    cell.note = (uint8_t)(note + 1);
+                    cell.vel = vel;
+                }
                 out->used_channels |= 1u << ch;
             }
         }
@@ -173,30 +182,94 @@ inline bool extract(const uint8_t* data, size_t size, uint32_t samplerate, Patte
         }
     }
 
-    // --- tempo track -> row start times ---------------------------------------
-    // Sample delta per tick is usecs / (10000 * timediv), with usecs updated by
-    // the global track; see V2MPlayer::Tick. Doubles are fine here: this table
-    // only drives the playhead highlight, never audio.
-    const double timediv2 = 10000.0 * (double)timediv;
-    double usecs = 5000.0 * (double)samplerate; // 120 BPM, V2MPlayer::Reset default
-    double sample = 0.0;
-    uint64_t tick = 0;
-    uint32_t gnr = 0;
-    uint64_t gtick = gdnum ? delta3(gptr, gdnum) : UINT64_MAX;
+    // --- sequencer schedule -> row start times ---------------------------------
+    // The sequencer (V2MPlayer::Render/Tick) does not run a continuous clock.
+    // It ticks at every event time -- notes, program changes, controllers,
+    // pitch bends and the global track, across all channels -- and converts
+    // each interval between ticks to samples with a 32-bit division whose
+    // fractional part is effectively dropped (the remainder is added to a
+    // 32-bit accumulator as if it were a 32.32 fraction, so it almost never
+    // carries). Integrating the tempo exactly therefore drifts ahead of the
+    // audio by up to half a sample per tick, a row or more over a song. The
+    // grid must show the row the sequencer is in, so this walks the same
+    // schedule with the same arithmetic. One quirk is reproduced on purpose:
+    // the sequencer skips straight to the first event, so sample 0 is that
+    // tick, not tick 0. (The pitch-bend stream is read with its own count as
+    // the stride, as the patched sequencer does; see
+    // patches/v2redux-pitchbend-stride.patch.)
+    std::vector<uint32_t> ticks;
+    ticks.reserve(gdnum + 256);
+    auto add_stream = [&](const Stream& s) {
+        uint32_t t = 0;
+        for (uint32_t i = 0; i < s.count; i++) {
+            t += delta3(s.ptr + i, s.count);
+            ticks.push_back(t);
+        }
+    };
+    add_stream(Stream { gptr, gdnum });
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        if (notes[ch].count == 0) {
+            continue;
+        }
+        add_stream(notes[ch]);
+        add_stream(pgms[ch]);
+        add_stream(bends[ch]);
+        for (int cc = 0; cc < 7; cc++) {
+            add_stream(ctls[ch][cc]);
+        }
+    }
+    std::sort(ticks.begin(), ticks.end());
+    ticks.erase(std::unique(ticks.begin(), ticks.end()), ticks.end());
 
-    for (uint64_t r = 0; r < rows; r++) {
-        out->row_sample[r] = (uint64_t)sample;
-        uint64_t target = (r + 1) * timediv / 8;
-        while (tick < target) {
-            uint64_t next = gtick < target ? gtick : target;
-            sample += (double)(next - tick) * usecs / timediv2;
-            tick = next;
-            if (tick == gtick) {
-                usecs = (double)rd32(gptr + 3 * gdnum + 4 * gnr) * ((double)samplerate / 100.0);
-                gnr++;
-                gtick = gnr < gdnum ? gtick + delta3(gptr + gnr, gdnum) : UINT64_MAX;
+    // Sample index at each scheduled tick, in the sequencer's arithmetic
+    // (V2MPlayer::Tick for the tempo, UpdateSampleDelta for the interval).
+    const uint32_t timediv2 = 10000u * timediv;
+    uint32_t usecs = 5000u * samplerate; // V2MPlayer::Reset default
+    uint32_t smplrem = 0;
+    uint64_t sample = 0;
+    uint32_t gnr = 0;
+    uint32_t gtick = gdnum ? delta3(gptr, gdnum) : 0;
+    std::vector<uint64_t> tick_sample(ticks.size());
+    for (size_t i = 0; i < ticks.size(); i++) {
+        tick_sample[i] = sample;
+        while (gnr < gdnum && gtick <= ticks[i]) {
+            usecs = rd32(gptr + 3 * gdnum + 4 * gnr) * (samplerate / 100);
+            gnr++;
+            if (gnr < gdnum) {
+                gtick += delta3(gptr + gnr, gdnum);
             }
         }
+        if (i + 1 < ticks.size()) {
+            uint64_t prod = (uint64_t)(ticks[i + 1] - ticks[i]) * usecs;
+            uint32_t quot = (uint32_t)(prod / timediv2);
+            uint32_t rem = (uint32_t)(prod % timediv2);
+            uint32_t newrem = smplrem + rem;
+            uint32_t carry = newrem < smplrem ? 1 : 0;
+            smplrem = newrem;
+            sample += quot + carry;
+        }
+    }
+
+    // Row r starts at the first tick that maps to it (events land on row
+    // time * 8 / timediv). Inside an interval the synth just renders, so the
+    // row boundary interpolates linearly between the two ticks.
+    size_t k = 0;
+    for (uint64_t r = 0; r < rows; r++) {
+        uint64_t start = (r * timediv + 7) / 8;
+        while (k + 1 < ticks.size() && ticks[k + 1] <= start) {
+            k++;
+        }
+        uint64_t at;
+        if (ticks.empty() || start <= ticks[k]) {
+            at = ticks.empty() ? 0 : tick_sample[k];
+        } else if (k + 1 < ticks.size()) {
+            uint64_t span = ticks[k + 1] - ticks[k];
+            at = tick_sample[k] + (start - ticks[k]) * (tick_sample[k + 1] - tick_sample[k]) / span;
+        } else {
+            // past the last event: the sequencer has stopped, extend at tempo
+            at = tick_sample[k] + (start - ticks[k]) * usecs / timediv2;
+        }
+        out->row_sample[r] = at;
     }
 
     return out->used_channels != 0;

@@ -1,0 +1,29 @@
+diff --git a/src/v2seq.cpp b/src/v2seq.cpp
+index 3fd8c03..b8e8792 100644
+--- a/src/v2seq.cpp
++++ b/src/v2seq.cpp
+@@ -139,7 +139,12 @@ void V2MPlayer::Reset()
+ 		UPDATENT(sc.pcnr,sc.pcnt, sc.pcptr, bc.pcnum);
+ 		sc.pbptr=bc.pbptr;
+ 		sc.pbnr=sc.lastpb0=sc.lastpb1=0;
+-		UPDATENT(sc.pbnr,sc.pbnt, sc.pbptr, bc.pcnum);
++		// The pitch-bend stream is its own column-major block of pbnum events;
++		// decoding it with the program-change count as the stride reads the
++		// first bend's time and every bend's value from the wrong bytes. On
++		// files with pcnum != pbnum (most of them) the first bend landed hours
++		// past the song and held the sequencer open until then.
++		UPDATENT(sc.pbnr,sc.pbnt, sc.pbptr, bc.pbnum);
+ 		for (sInt cn=0; cn<7; cn++)
+ 		{
+ 			V2MBase::Channel::CC &bcc=bc.ctl[cn];
+@@ -265,8 +270,8 @@ void V2MPlayer::Tick()
+ 		if (sc.pbnr<bc.pbnum && m_state.time==sc.pbnt)
+ 		{
+ 			PUTSTAT(0xe0|ch)
+-			*mptr++=(sc.lastpb0+=sc.pbptr[3*bc.pcnum]);
+-			*mptr++=(sc.lastpb1+=sc.pbptr[4*bc.pcnum]);
++			*mptr++=(sc.lastpb0+=sc.pbptr[3*bc.pbnum]);
++			*mptr++=(sc.lastpb1+=sc.pbptr[4*bc.pbnum]);
+ 			sc.pbnr++;
+ 			sc.pbptr++;
+ 			UPDATENT2(sc.pbnr,sc.pbnt,sc.pbptr,bc.pbnum);
